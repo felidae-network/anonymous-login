@@ -58,18 +58,27 @@ impl<F: FieldExt> MerkleChip<F> {
             instance,
         }
     }
-
+    //                36
+    //            /      \
+    //       10              26
+    //     /   \            /  \
+    //   3       7       11      15
+    //  / \     / \     / \     / \
+    // 1   2   3   4   5   6   7   8
+    // to prove the membership of 1 the path is 1, 2, 7, 26
+    //
     #[allow(clippy::type_complexity)]
-    pub fn assign_first_row(
+    pub fn assign(
         &self,
         mut layouter: impl Layouter<F>,
-    ) -> Result<(AssignedCell<F, F>, AssignedCell<F, F>, AssignedCell<F, F>), Error> {
+        nrows: usize,
+    ) -> Result<AssignedCell<F, F>, Error> {
         layouter.assign_region(
-            || "first row",
+            || "entire table",
             |mut region| {
                 self.config.selector.enable(&mut region, 0)?;
 
-                let a_cell = region.assign_advice_from_instance(
+                let mut a_cell = region.assign_advice_from_instance(
                     || "f(0)",
                     self.config.instance,
                     0,
@@ -77,7 +86,7 @@ impl<F: FieldExt> MerkleChip<F> {
                     0,
                 )?;
 
-                let b_cell = region.assign_advice_from_instance(
+                let mut b_cell = region.assign_advice_from_instance(
                     || "f(1)",
                     self.config.instance,
                     1,
@@ -85,40 +94,32 @@ impl<F: FieldExt> MerkleChip<F> {
                     0,
                 )?;
 
-                let c_cell = region.assign_advice(
+                let mut c_cell = region.assign_advice(
                     || "a + b",
                     self.config.col_c,
                     0,
                     || a_cell.value().copied() + b_cell.value(),
                 )?;
+                for row in 1..nrows {
+                    self.config.selector.enable(&mut region, row)?;
+                    // Copy the value from c in previous row to a in current row
+                    a_cell = c_cell.copy_advice(|| "a", &mut region, self.config.col_a, row)?;
 
-                Ok((a_cell, b_cell, c_cell))
-            },
-        )
-    }
+                    b_cell = region.assign_advice_from_instance(
+                        || "b",
+                        self.config.instance,
+                        row + 1,
+                        self.config.col_b,
+                        row,
+                    )?;
 
-    pub fn assign_row(
-        &self,
-        mut layouter: impl Layouter<F>,
-        prev_b: &AssignedCell<F, F>,
-        prev_c: &AssignedCell<F, F>,
-    ) -> Result<AssignedCell<F, F>, Error> {
-        layouter.assign_region(
-            || "next row",
-            |mut region| {
-                self.config.selector.enable(&mut region, 0)?;
-
-                // Copy the value from b & c in previous row to a & b in current row
-                prev_b.copy_advice(|| "a", &mut region, self.config.col_a, 0)?;
-                prev_c.copy_advice(|| "b", &mut region, self.config.col_b, 0)?;
-
-                let c_cell = region.assign_advice(
-                    || "c",
-                    self.config.col_c,
-                    0,
-                    || prev_b.value().copied() + prev_c.value(),
-                )?;
-
+                    c_cell = region.assign_advice(
+                        || "c",
+                        self.config.col_c,
+                        row,
+                        || a_cell.value().copied() + b_cell.value(),
+                    )?;
+                }
                 Ok(c_cell)
             },
         )
@@ -156,16 +157,9 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
     ) -> Result<(), Error> {
         let chip = MerkleChip::construct(config);
 
-        let (_, mut prev_b, mut prev_c) =
-            chip.assign_first_row(layouter.namespace(|| "first row"))?;
+        let c_cell = chip.assign(layouter.namespace(|| "entire table 1"), 3)?;
 
-        for _i in 3..10 {
-            let c_cell = chip.assign_row(layouter.namespace(|| "next row"), &prev_b, &prev_c)?;
-            prev_b = prev_c;
-            prev_c = c_cell;
-        }
-
-        chip.expose_public(layouter.namespace(|| "out"), &prev_c, 2)?;
+        chip.expose_public(layouter.namespace(|| "out"), &c_cell, 4)?;
 
         Ok(())
     }
@@ -183,20 +177,39 @@ mod tests {
         let k = 4;
 
         let a = Fp::from(1); // F[0]
-        let b = Fp::from(1); // F[1]
-        let out = Fp::from(55); // F[9]
+        let b = Fp::from(2); // F[1]
+        let c = Fp::from(7); // F[2]
+        let d = Fp::from(26); // F[3]
+        let out = Fp::from(36); // F[4]
 
         let circuit = MyCircuit(PhantomData);
 
-        let mut public_input = vec![a, b, out];
+        let public_input = vec![a, b, c, d, out];
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
+        // or
+        assert_eq!(prover.verify(), Ok(()));
+    }
 
-        public_input[2] += Fp::one();
-        let _prover = MockProver::run(k, &circuit, vec![public_input]).unwrap();
-        // uncomment the following line and the assert will fail
-        // _prover.assert_satisfied();
+    #[test]
+    fn merkle_example_fails_on_wrong_root() {
+        let k = 4;
+
+        let a = Fp::from(1); // F[0]
+        let b = Fp::from(2); // F[1]
+        let c = Fp::from(7); // F[2]
+        let d = Fp::from(26); // F[3]
+        let out = Fp::from(37); // F[4]     // correct is 36
+
+        let circuit = MyCircuit(PhantomData);
+
+        let public_input = vec![a, b, c, d, out];
+
+        let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
+
+        assert_ne!(prover.verify(), Ok(()));
+        //TODO! match the exact error
     }
 
     #[cfg(feature = "dev-graph")]
