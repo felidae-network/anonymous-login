@@ -94,15 +94,18 @@ impl<F: FieldExt> MerkleChip<F> {
                 self.config.selector.enable(&mut region, 0)?;
 
                 let mut a_cell = region.assign_advice_from_instance(
+
                     || "a",
                     self.config.instance,
                     0,
                     self.config.col_a,
                     0,
                 )?;
+
                 // b = 0; // in first row
                 let mut b_cell = region.assign_advice(
                     || "b",
+
                     self.config.col_b,
                     0,
                     || Value::known(F::zero()),
@@ -125,6 +128,7 @@ impl<F: FieldExt> MerkleChip<F> {
                     b_cell = region.assign_advice_from_instance(
                         || "b",
                         self.config.instance,
+
                         row,
                         self.config.col_b,
                         row,
@@ -138,6 +142,7 @@ impl<F: FieldExt> MerkleChip<F> {
                     };
 
                     c_cell = region.assign_advice(|| "c", self.config.col_c, row, || value)?;
+
                 }
                 Ok(c_cell)
             },
@@ -177,6 +182,7 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
         mut layouter: impl Layouter<F>,
     ) -> Result<(), Error> {
         let chip = MerkleChip::construct(config);
+
 
         let c_cell = chip.assign(layouter.namespace(|| "entire table 1"), self.inputs.clone())?;
         //last element in the input is the root hash
@@ -228,11 +234,13 @@ mod tests {
             inputs: public_input.clone(),
         };
 
+
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
         // or
         assert_eq!(prover.verify(), Ok(()));
     }
+
     #[test]
     fn merkle_example_fails_on_wrong_root() {
         let k = 4;
@@ -249,6 +257,7 @@ mod tests {
         };
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
+
 
         assert_ne!(prover.verify(), Ok(()));
         //TODO! match the exact error
