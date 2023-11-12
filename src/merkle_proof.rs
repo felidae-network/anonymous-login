@@ -1,6 +1,6 @@
-use crate::gadgets::is_zero::{IsZeroChip, IsZeroConfig};
 /// Starting with + operation
 /// Ultimately + will be replaced by Hash operation
+use crate::gadgets::is_zero::{IsZeroChip, IsZeroConfig};
 use halo2_proofs::{arithmetic::FieldExt, circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 #[derive(Debug, Clone)]
@@ -84,7 +84,7 @@ impl<F: FieldExt> MerkleChip<F> {
     pub fn assign(
         &self,
         mut layouter: impl Layouter<F>,
-        inputs: Vec<F>,
+        path: Vec<F>,
     ) -> Result<AssignedCell<F, F>, Error> {
         layouter.assign_region(
             || "entire table, c = if b==0 {a} else {a+b}",
@@ -92,14 +92,9 @@ impl<F: FieldExt> MerkleChip<F> {
                 let is_zero_chip = IsZeroChip::construct(self.config.is_zero.clone());
 
                 self.config.selector.enable(&mut region, 0)?;
+                let mut a_cell =
+                    region.assign_advice(|| "a", self.config.col_a, 0, || Value::known(path[0]))?;
 
-                let mut a_cell = region.assign_advice_from_instance(
-                    || "a",
-                    self.config.instance,
-                    0,
-                    self.config.col_a,
-                    0,
-                )?;
                 // b = 0; // in first row
                 let mut b_cell = region.assign_advice(
                     || "b",
@@ -115,23 +110,22 @@ impl<F: FieldExt> MerkleChip<F> {
                     || a_cell.value().copied(),
                 )?;
                 is_zero_chip.assign(&mut region, 0, b_cell.value().copied())?;
-                // last element is the root element
-                for row in 1..(inputs.len() - 1) {
+
+                for row in 1..(path.len()) {
                     self.config.selector.enable(&mut region, row)?;
 
                     // Copy the value from c in previous row to a in current row
                     a_cell = c_cell.copy_advice(|| "a", &mut region, self.config.col_a, row)?;
 
-                    b_cell = region.assign_advice_from_instance(
+                    b_cell = region.assign_advice(
                         || "b",
-                        self.config.instance,
-                        row,
                         self.config.col_b,
                         row,
+                        || Value::known(path[row]),
                     )?;
                     is_zero_chip.assign(&mut region, row, b_cell.value().copied())?;
 
-                    let value = if inputs[row] == F::zero() {
+                    let value = if path[row] == F::zero() {
                         a_cell.value().copied()
                     } else {
                         a_cell.value().copied() + b_cell.value()
@@ -156,7 +150,8 @@ impl<F: FieldExt> MerkleChip<F> {
 
 #[derive(Default)]
 struct MyCircuit<F> {
-    inputs: Vec<F>,
+    // private input
+    path: Vec<F>,
 }
 
 impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
@@ -178,9 +173,9 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
     ) -> Result<(), Error> {
         let chip = MerkleChip::construct(config);
 
-        let c_cell = chip.assign(layouter.namespace(|| "entire table 1"), self.inputs.clone())?;
-        //last element in the input is the root hash
-        chip.expose_public(layouter.namespace(|| "out"), &c_cell, self.inputs.len() - 1)?;
+        let c_cell = chip.assign(layouter.namespace(|| "entire table 1"), self.path.clone())?;
+        //only public input is the root hash
+        chip.expose_public(layouter.namespace(|| "out"), &c_cell, 0)?;
 
         Ok(())
     }
@@ -188,7 +183,7 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
+    // use std::marker::PhantomData;
 
     use super::MyCircuit;
     use halo2_proofs::{dev::MockProver, pasta::Fp};
@@ -201,12 +196,11 @@ mod tests {
         let b = Fp::from(2); // F[1]
         let c = Fp::from(7); // F[2]
         let d = Fp::from(26); // F[3]
-        let out = Fp::from(36); // F[4]
+        let root = Fp::from(36); // F[4]
 
-        let public_input = vec![a, b, c, d, out];
-        let circuit = MyCircuit {
-            inputs: public_input.clone(),
-        };
+        let public_input = vec![root];
+        let path = vec![a, b, c, d];
+        let circuit = MyCircuit { path };
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
@@ -221,12 +215,11 @@ mod tests {
         let a = Fp::from(1); // F[0]
         let b = Fp::from(2); // F[1]
         let c = Fp::from(7); // F[2]
-        let out = Fp::from(10); // F[3]
+        let root = Fp::from(10); // F[3]
 
-        let public_input = vec![a, b, c, out];
-        let circuit = MyCircuit {
-            inputs: public_input.clone(),
-        };
+        let path = vec![a, b, c];
+        let public_input = vec![root];
+        let circuit = MyCircuit { path };
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
@@ -241,12 +234,11 @@ mod tests {
         let b = Fp::from(2); // F[1]
         let c = Fp::from(7); // F[2]
         let d = Fp::from(26); // F[3]
-        let out = Fp::from(37); // F[4]     // correct is 36
+        let root = Fp::from(37); // F[4]     // correct is 36
 
-        let public_input = vec![a, b, c, d, out];
-        let circuit = MyCircuit {
-            inputs: public_input.clone(),
-        };
+        let public_input = vec![root];
+        let path = vec![a, b, c, d];
+        let circuit = MyCircuit { path };
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
 
@@ -268,10 +260,9 @@ mod tests {
         let d = Fp::from(26); // F[3]
         let out = Fp::from(36); // F[4]
 
-        let public_input = vec![a, b, c, d, out];
-        let circuit = MyCircuit::<Fp> {
-            inputs: public_input,
-        };
+        let path = vec![a, b, c, d];
+        let public_input = vec![out];
+        let circuit = MyCircuit::<Fp> { path };
         halo2_proofs::dev::CircuitLayout::default()
             .render(4, &circuit, &root)
             .unwrap();
