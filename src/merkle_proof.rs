@@ -95,9 +95,22 @@ impl<F: FieldExt> MerkleChip<F> {
                 let mut a_cell =
                     region.assign_advice(|| "a", self.config.col_a, 0, || Value::known(path[0]))?;
 
+<<<<<<< HEAD
+=======
+                let mut a_cell = region.assign_advice_from_instance(
+
+                    || "a",
+                    self.config.instance,
+                    0,
+                    self.config.col_a,
+                    0,
+                )?;
+
+>>>>>>> 6fa10a029ce9936d4118b34d41fed87f54091092
                 // b = 0; // in first row
                 let mut b_cell = region.assign_advice(
                     || "b",
+
                     self.config.col_b,
                     0,
                     || Value::known(F::zero()),
@@ -119,6 +132,12 @@ impl<F: FieldExt> MerkleChip<F> {
 
                     b_cell = region.assign_advice(
                         || "b",
+<<<<<<< HEAD
+=======
+                        self.config.instance,
+
+                        row,
+>>>>>>> 6fa10a029ce9936d4118b34d41fed87f54091092
                         self.config.col_b,
                         row,
                         || Value::known(path[row]),
@@ -132,6 +151,7 @@ impl<F: FieldExt> MerkleChip<F> {
                     };
 
                     c_cell = region.assign_advice(|| "c", self.config.col_c, row, || value)?;
+
                 }
                 Ok(c_cell)
             },
@@ -173,9 +193,16 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
     ) -> Result<(), Error> {
         let chip = MerkleChip::construct(config);
 
+<<<<<<< HEAD
         let c_cell = chip.assign(layouter.namespace(|| "entire table 1"), self.path.clone())?;
         //only public input is the root hash
         chip.expose_public(layouter.namespace(|| "out"), &c_cell, 0)?;
+=======
+
+        let c_cell = chip.assign(layouter.namespace(|| "entire table 1"), self.inputs.clone())?;
+        //last element in the input is the root hash
+        chip.expose_public(layouter.namespace(|| "out"), &c_cell, self.inputs.len() - 1)?;
+>>>>>>> 6fa10a029ce9936d4118b34d41fed87f54091092
 
         Ok(())
     }
@@ -221,11 +248,13 @@ mod tests {
         let public_input = vec![root];
         let circuit = MyCircuit { path };
 
+
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
         // or
         assert_eq!(prover.verify(), Ok(()));
     }
+
     #[test]
     fn merkle_example_fails_on_wrong_root() {
         let k = 4;
@@ -241,6 +270,7 @@ mod tests {
         let circuit = MyCircuit { path };
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
+
 
         assert_ne!(prover.verify(), Ok(()));
         //TODO! match the exact error
