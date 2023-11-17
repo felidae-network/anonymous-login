@@ -159,7 +159,8 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
     type FloorPlanner = SimpleFloorPlanner;
 
     fn without_witnesses(&self) -> Self {
-        Self::default()
+        // Self::default()
+        Self { path: vec![] }
     }
 
     fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
@@ -185,8 +186,132 @@ impl<F: FieldExt> Circuit<F> for MyCircuit<F> {
 mod tests {
     // use std::marker::PhantomData;
 
-    use super::MyCircuit;
-    use halo2_proofs::{dev::MockProver, pasta::Fp};
+    use core::panic;
+
+    use super::*;
+    use halo2_proofs::{
+        dev::MockProver,
+        pasta::{EqAffine, Fp},
+        poly::commitment::Params,
+        transcript::{Blake2bRead, Blake2bWrite, Challenge255},
+    };
+    use rand::rngs::OsRng;
+    // a struct to hold the common setup between prover and verifier
+    pub struct TestEnvironment {
+        k: u32,
+        pk: ProvingKey<EqAffine>,
+        vk: VerifyingKey<EqAffine>,
+        params: Params<EqAffine>,
+    }
+    // Helper function to initialize the common environment
+    fn setup() -> TestEnvironment {
+        let k = 4;
+        // Generate proving and verfication keys on dummy circuit
+        let params: Params<EqAffine> = Params::new(k);
+        let v = Fp::zero();
+        // path has to be of fixed len. say 4
+        let empty_circuit: MyCircuit<Fp> = MyCircuit {
+            path: [v; 4].into(),
+        };
+        let vk = keygen_vk(&params, &empty_circuit).expect("keygen_vk should not fail");
+        let pk = keygen_pk(&params, vk.clone(), &empty_circuit).expect("keygen_pk should not fail");
+
+        // Perform setup here and return the TestEnvironment instance
+        TestEnvironment { k, pk, vk, params }
+    }
+    #[test]
+    fn merkle_generate_proof() {
+        let a = Fp::from(1); // F[0]
+        let b = Fp::from(2); // F[1]
+        let c = Fp::from(7); // F[2]
+        let d = Fp::from(26); // F[3]
+        let common_env = setup();
+
+        // let params: Params<EqAffine> = Params::new(common_env.k);
+        let root = Fp::from(36); // F[4]
+        let public_input = vec![root];
+        let path = vec![a, b, c, d];
+        let circuit = MyCircuit { path };
+        //mock test if this circuit is satisfied
+        let prover = match MockProver::run(common_env.k, &circuit, vec![public_input.clone()]) {
+            Ok(prover) => prover,
+            Err(e) => panic!("{:?}", e),
+        };
+        prover.assert_satisfied();
+
+        let mut transcript: Blake2bWrite<_, _, Challenge255<_>> =
+            Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+
+        create_proof(
+            &common_env.params,
+            &common_env.pk,
+            &[circuit],
+            &[&[&[root]]],
+            OsRng,
+            &mut transcript,
+        )
+        .expect("proof generation should not fail");
+        let proof: Vec<u8> = transcript.finalize();
+        println!("proof length:{}", proof.len());
+
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        let strategy = SingleVerifier::new(&common_env.params);
+        assert!(verify_proof(
+            &common_env.params,
+            &common_env.vk,
+            strategy,
+            &[&[&public_input[..]]],
+            &mut transcript,
+        )
+        .is_ok());
+    }
+    #[test]
+    fn merkle_generate_proof_on_smaller_path() {
+        let a = Fp::from(1); // F[0]
+        let b = Fp::from(2); // F[1]
+        let c = Fp::from(7); // F[2]
+        let d = Fp::zero(); // F[3]  // pad to make same length
+        let root = Fp::from(10); // F[4]
+        let common_env = setup();
+
+        // verify smaller
+        let public_input = vec![root];
+        // pad with field value zero to meet the path length
+        let path = vec![a, b, c, d];
+        let circuit = MyCircuit { path };
+        //mock test if this circuit is satisfied
+        let prover = match MockProver::run(common_env.k, &circuit, vec![public_input.clone()]) {
+            Ok(prover) => prover,
+            Err(e) => panic!("{:?}", e),
+        };
+        prover.assert_satisfied();
+
+        let mut transcript: Blake2bWrite<_, _, Challenge255<_>> =
+            Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+
+        create_proof(
+            &common_env.params,
+            &common_env.pk,
+            &[circuit],
+            &[&[&[root]]],
+            OsRng,
+            &mut transcript,
+        )
+        .expect("proof generation should not fail");
+        let proof: Vec<u8> = transcript.finalize();
+        println!("proof length:{}", proof.len());
+
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        let strategy = SingleVerifier::new(&common_env.params);
+        assert!(verify_proof(
+            &common_env.params,
+            common_env.pk.get_vk(),
+            strategy,
+            &[&[&public_input[..]]],
+            &mut transcript,
+        )
+        .is_ok());
+    }
 
     #[test]
     fn merkle_example1() {
@@ -226,6 +351,7 @@ mod tests {
         // or
         assert_eq!(prover.verify(), Ok(()));
     }
+
     #[test]
     fn merkle_example_fails_on_wrong_root() {
         let k = 4;
